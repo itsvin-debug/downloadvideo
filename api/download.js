@@ -1,13 +1,24 @@
 import axios from 'axios';
 import * as cheerio from 'cheerio';
 
-// User Agent modern
 const UA_DESKTOP = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
 const UA_MOBILE = 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1';
+const SAVENOW_API_KEY = 'dfcb6d76f2f6a9894gjkege8a4ab232222';
 
-// ===== DETECTOR =====
+// ===== URL CLEANER & DETECTOR =====
+function cleanInputUrl(raw) {
+  if (!raw) return '';
+  let str = raw.trim();
+  // Tangani jika ada slash di awal seperti /www.instagram.com...
+  str = str.replace(/^\/+/, '');
+  if (!str.startsWith('http://') && !str.startsWith('https://')) {
+    str = 'https://' + str;
+  }
+  return str;
+}
+
 function detectPlatform(rawUrl) {
-  const url = rawUrl.trim();
+  const url = cleanInputUrl(rawUrl);
   if (/tiktok\.com|vt\.tiktok\.com/i.test(url)) return 'tiktok';
   if (/instagram\.com|instagr\.am/i.test(url)) return 'instagram';
   if (/twitter\.com|x\.com/i.test(url)) return 'twitter';
@@ -15,8 +26,100 @@ function detectPlatform(rawUrl) {
   return null;
 }
 
+// ===== HELPER SAVENOW MULTI-PLATFORM SCRAPER =====
+async function scrapeViaSaveNow(targetUrl, formatList = ['1080', '720', 'mp3'], defaultTitle = 'Media Video', fallbackAuthor = 'Creator') {
+  try {
+    const initPromises = formatList.map(async fmt => {
+      try {
+        const apiUrl = `https://p.savenow.to/api/v2/download?format=${fmt}&url=${encodeURIComponent(targetUrl)}&apikey=${SAVENOW_API_KEY}`;
+        const res = await axios.get(apiUrl, {
+          headers: { 'User-Agent': UA_DESKTOP, 'Referer': 'https://y2down.cc/' },
+          timeout: 7000
+        });
+        return { format: fmt, progressUrl: res.data?.progress_url, downloadUrl: res.data?.download_url, title: res.data?.title, thumbnail: res.data?.thumbnail_url || res.data?.info?.image };
+      } catch (e) {
+        return { format: fmt, error: e.message };
+      }
+    });
+
+    const activeTasks = await Promise.all(initPromises);
+    const validTasks = activeTasks.filter(t => t.progressUrl || t.downloadUrl);
+
+    if (validTasks.length > 0) {
+      const pollPromises = validTasks.map(async task => {
+        let finalUrl = task.downloadUrl || null;
+        if (!finalUrl && task.progressUrl) {
+          // Poll maksimal 9x (@ 800ms)
+          for (let i = 0; i < 9; i++) {
+            await new Promise(r => setTimeout(r, 800));
+            try {
+              const progRes = await axios.get(task.progressUrl, {
+                headers: { 'User-Agent': UA_DESKTOP, 'Referer': 'https://y2down.cc/' },
+                timeout: 4000
+              });
+              if (progRes.data?.download_url) {
+                finalUrl = progRes.data.download_url;
+                break;
+              }
+            } catch (_) {}
+          }
+        }
+
+        if (finalUrl) {
+          const isAudio = task.format === 'mp3';
+          const is1080 = task.format === '1080';
+          return {
+            label: isAudio ? 'Audio MP3' : is1080 ? 'Resolusi HD 1080p' : 'Resolusi HD 720p',
+            quality: isAudio ? '128kbps' : is1080 ? '1080p (Full HD)' : '720p (Standard HD)',
+            url: finalUrl,
+            type: isAudio ? 'audio' : 'video',
+            extension: isAudio ? 'mp3' : 'mp4',
+            filename: `media_${Date.now()}_${task.format}.${isAudio ? 'mp3' : 'mp4'}`
+          };
+        }
+        return null;
+      });
+
+      const resolved = (await Promise.all(pollPromises)).filter(Boolean);
+      if (resolved.length > 0) {
+        const video1080 = resolved.find(r => r.label.includes('1080'));
+        const video720 = resolved.find(r => r.label.includes('720'));
+        const audioMp3 = resolved.find(r => r.type === 'audio');
+
+        const downloadLinks = [];
+        if (video1080) downloadLinks.push(video1080);
+        if (video720) {
+          downloadLinks.push(video720);
+        } else if (video1080) {
+          downloadLinks.push({
+            ...video1080,
+            label: 'Resolusi HD 720p',
+            quality: '720p (Standard HD)',
+            filename: `media_${Date.now()}_720p.mp4`
+          });
+        }
+        if (audioMp3) downloadLinks.push(audioMp3);
+
+        const firstValid = validTasks.find(t => t.title);
+        const title = firstValid?.title || defaultTitle;
+        const thumbnail = firstValid?.thumbnail || null;
+
+        return {
+          title,
+          author: fallbackAuthor,
+          thumbnail,
+          downloadLinks,
+          musicInfo: { title, author: fallbackAuthor }
+        };
+      }
+    }
+  } catch (_) {}
+  return null;
+}
+
 // ===== TIKTOK SCRAPER =====
-async function downloadTikTok(url) {
+async function downloadTikTok(rawUrl) {
+  const url = cleanInputUrl(rawUrl);
   let lastError = null;
 
   // Strategi 1: SSSTik Scraper
@@ -30,7 +133,7 @@ async function downloadTikTok(url) {
     const cookies = (homeRes.headers['set-cookie'] || []).map(c => c.split(';')[0]).join('; ');
 
     const postRes = await axios.post('https://ssstik.io/abc?url=dl', new URLSearchParams({
-      id: url.trim(), locale: 'en', tt: ttToken
+      id: url, locale: 'en', tt: ttToken
     }), {
       headers: {
         'User-Agent': UA_DESKTOP,
@@ -107,7 +210,7 @@ async function downloadTikTok(url) {
   // Strategi 2: TikWM Fallback
   try {
     const res = await axios.post('https://www.tikwm.com/api/', new URLSearchParams({
-      url: url.trim(),
+      url: url,
       count: '12',
       cursor: '0',
       web: '1',
@@ -177,39 +280,46 @@ async function downloadTikTok(url) {
   throw new Error(`Gagal memproses TikTok: ${lastError?.message || 'Video tidak ditemukan'}`);
 }
 
-// ===== HELPER EKSTRAKSI CLEAN INSTAGRAM =====
-function extractCleanIGUrl(html, key) {
-  const marker = `\\"${key}\\":\\"`;
-  const idx = html.indexOf(marker);
-  if (idx === -1) {
-    const marker2 = `"${key}":"`;
-    const idx2 = html.indexOf(marker2);
-    if (idx2 === -1) return null;
-    const start = idx2 + marker2.length;
-    const end = html.indexOf(`"`, start);
-    if (end === -1) return null;
-    return html.substring(start, end).replace(/\\\\\//g, '/').replace(/\\\//g, '/').replace(/\\u0026/g, '&');
+// ===== INSTAGRAM SCRAPER =====
+function extractAllIGMedia(html) {
+  const videoUrls = [];
+  const imageUrls = [];
+
+  const videoMatches = html.matchAll(/video_url\\?":\\?"([^"]+)\\?"/gi);
+  for (const m of videoMatches) {
+    if (m[1]) {
+      let clean = m[1].replace(/\\/g, '').replace(/&amp;/g, '&').replace(/u0026/g, '&').replace(/u00253D/gi, '=');
+      if (clean.startsWith('http') && !videoUrls.includes(clean)) {
+        videoUrls.push(clean);
+      }
+    }
   }
-  const start = idx + marker.length;
-  const end = html.indexOf(`\\"`, start);
-  if (end === -1) return null;
-  let raw = html.substring(start, end);
-  return raw.replace(/\\\\\//g, '/').replace(/\\\//g, '/').replace(/\\u0026/g, '&');
+
+  const displayMatches = html.matchAll(/display_url\\?":\\?"([^"]+)\\?"/gi);
+  for (const m of displayMatches) {
+    if (m[1]) {
+      let clean = m[1].replace(/\\/g, '').replace(/&amp;/g, '&').replace(/u0026/g, '&').replace(/u00253D/gi, '=');
+      if (clean.startsWith('http') && !imageUrls.includes(clean)) {
+        imageUrls.push(clean);
+      }
+    }
+  }
+
+  return { videoUrls, imageUrls };
 }
 
-// ===== INSTAGRAM SCRAPER =====
 async function downloadInstagram(rawUrl) {
+  const url = cleanInputUrl(rawUrl);
   let lastError = null;
 
-  let cleanUrl = rawUrl.trim().split('?')[0].replace(/\/+$/, '');
-  const shortcodeMatch = cleanUrl.match(/(?:reel|reels|p|tv|stories|share)\/([A-Za-z0-9_-]+)/i);
+  const shortcodeMatch = url.match(/(?:reel|reels|p|tv|stories|share)\/([A-Za-z0-9_-]+)/i);
   const shortcode = shortcodeMatch ? shortcodeMatch[1] : null;
 
   if (!shortcode) {
     throw new Error('Link Instagram tidak valid. Masukkan link Reels, Postingan, atau TV Instagram yang benar.');
   }
 
-  // STRATEGI 1: Instagram Embed Extraction (Substrings Parser)
+  // STRATEGI 1: Instagram Embed Substring Parser (Sangat Cepat & Direct)
   try {
     const embedUrl = `https://www.instagram.com/p/${shortcode}/embed/captioned/`;
     const res = await axios.get(embedUrl, {
@@ -218,29 +328,28 @@ async function downloadInstagram(rawUrl) {
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
         'Accept-Language': 'en-US,en;q=0.9'
       },
-      timeout: 10000
+      timeout: 7000
     });
 
     const html = res.data;
-    const videoUrl = extractCleanIGUrl(html, 'video_url');
-    const displayUrl = extractCleanIGUrl(html, 'display_url');
-
+    const { videoUrls, imageUrls } = extractAllIGMedia(html);
     const $ = cheerio.load(html);
     const caption = $('.Caption').text().trim() || $('div.Caption').text().trim() || `Instagram Media (${shortcode})`;
     const author = $('.Avatar img').attr('alt') || 'Instagram User';
 
-    if (videoUrl) {
+    if (videoUrls.length > 0) {
+      const primaryVideo = videoUrls[0];
       return {
         success: true,
         platform: 'Instagram',
         title: caption,
         author: author,
-        thumbnail: displayUrl || null,
+        thumbnail: imageUrls[0] || null,
         downloadLinks: [
           {
             label: 'Resolusi HD 1080p',
             quality: '1080p (Full HD)',
-            url: videoUrl,
+            url: primaryVideo,
             type: 'video',
             extension: 'mp4',
             filename: `instagram_${shortcode}_1080p.mp4`
@@ -248,7 +357,7 @@ async function downloadInstagram(rawUrl) {
           {
             label: 'Resolusi HD 720p',
             quality: '720p (Standard HD)',
-            url: videoUrl,
+            url: primaryVideo,
             type: 'video',
             extension: 'mp4',
             filename: `instagram_${shortcode}_720p.mp4`
@@ -256,7 +365,7 @@ async function downloadInstagram(rawUrl) {
           {
             label: 'Audio MP3',
             quality: '128kbps',
-            url: videoUrl,
+            url: primaryVideo,
             type: 'audio',
             extension: 'mp3',
             filename: `instagram_audio_${shortcode}.mp3`
@@ -266,18 +375,18 @@ async function downloadInstagram(rawUrl) {
       };
     }
 
-    if (displayUrl) {
+    if (imageUrls.length > 0) {
       return {
         success: true,
         platform: 'Instagram',
         title: caption,
         author: author,
-        thumbnail: displayUrl,
+        thumbnail: imageUrls[0],
         downloadLinks: [
           {
             label: 'Foto HD (Original)',
             quality: 'High Resolution',
-            url: displayUrl,
+            url: imageUrls[0],
             type: 'image',
             extension: 'jpg',
             filename: `instagram_${shortcode}.jpg`
@@ -289,57 +398,15 @@ async function downloadInstagram(rawUrl) {
     lastError = e;
   }
 
-  // STRATEGI 2: SnapSave Fallback
+  // STRATEGI 2: Savenow V2 Fallback
   try {
-    const snapRes = await axios.post('https://snapinsta.app/action.php', new URLSearchParams({
-      url: `https://www.instagram.com/reel/${shortcode}/`,
-      action: 'post'
-    }), {
-      headers: {
-        'User-Agent': UA_DESKTOP,
-        'Content-Type': 'application/x-www-form-urlencoded'
-      },
-      timeout: 10000
-    });
-
-    const snapHtml = typeof snapRes.data === 'string' ? snapRes.data : snapRes.data?.data || '';
-    if (snapHtml && snapHtml.includes('http')) {
-      const $ = cheerio.load(snapHtml);
-      const downloadLinks = [];
-      $('a[href^="http"]').each((i, el) => {
-        const href = $(el).attr('href');
-        if (href && (href.includes('cdninstagram') || href.includes('fbcdn') || href.includes('snapinsta') || href.includes('download'))) {
-          downloadLinks.push({
-            label: i === 0 ? 'Resolusi HD 1080p' : 'Resolusi HD 720p',
-            quality: i === 0 ? '1080p (Full HD)' : '720p (Standard HD)',
-            url: href,
-            type: 'video',
-            extension: 'mp4',
-            filename: `instagram_${shortcode}_${i === 0 ? '1080p' : '720p'}.mp4`
-          });
-        }
-      });
-
-      if (downloadLinks.length > 0) {
-        downloadLinks.push({
-          label: 'Audio MP3',
-          quality: '128kbps',
-          url: downloadLinks[0].url,
-          type: 'audio',
-          extension: 'mp3',
-          filename: `instagram_audio_${shortcode}.mp3`
-        });
-
-        return {
-          success: true,
-          platform: 'Instagram',
-          title: `Instagram Video (${shortcode})`,
-          author: 'Instagram Creator',
-          thumbnail: $('img').first().attr('src') || null,
-          downloadLinks,
-          musicInfo: { title: 'Instagram Audio Track', author: 'Instagram Creator' }
-        };
-      }
+    const snData = await scrapeViaSaveNow(`https://www.instagram.com/reel/${shortcode}/`, ['1080', '720', 'mp3'], `Instagram Media (${shortcode})`, 'Instagram Creator');
+    if (snData && snData.downloadLinks?.length > 0) {
+      return {
+        success: true,
+        platform: 'Instagram',
+        ...snData
+      };
     }
   } catch (e) {
     lastError = e;
@@ -350,63 +417,25 @@ async function downloadInstagram(rawUrl) {
 
 // ===== X / TWITTER SCRAPER =====
 async function downloadTwitter(rawUrl) {
+  const url = cleanInputUrl(rawUrl);
   let lastError = null;
 
-  const cleanUrl = rawUrl.trim().split('?')[0];
-  const tweetIdMatch = cleanUrl.match(/status\/(\d+)/i);
+  const tweetIdMatch = url.match(/status\/(\d+)/i);
   const tweetId = tweetIdMatch ? tweetIdMatch[1] : null;
 
   if (!tweetId) {
     throw new Error('ID Tweet tidak ditemukan. Masukkan link postingan X (Twitter) yang valid.');
   }
 
-  // STRATEGI 1: VxTwitter Open Engine
+  // STRATEGI 1: Savenow V2 Engine
   try {
-    const vxRes = await axios.get(`https://api.vxtwitter.com/Twitter/status/${tweetId}`, {
-      headers: { 'User-Agent': UA_DESKTOP },
-      timeout: 8000
-    });
-    if (vxRes.data) {
-      const item = vxRes.data;
-      const videoUrl = item.video_url || item.mediaURLs?.find(u => u.includes('.mp4') || u.includes('video'));
-      if (videoUrl) {
-        const author = item.user_name || item.user_screen_name || 'X User';
-        const title = item.text || 'X Video';
-        return {
-          success: true,
-          platform: 'X (Twitter)',
-          title,
-          author,
-          thumbnail: item.mediaURLs?.[0] || null,
-          downloadLinks: [
-            {
-              label: 'Resolusi HD 1080p',
-              quality: '1080p (Full HD)',
-              url: videoUrl,
-              type: 'video',
-              extension: 'mp4',
-              filename: `twitter_${tweetId}_1080p.mp4`
-            },
-            {
-              label: 'Resolusi HD 720p',
-              quality: '720p (Standard HD)',
-              url: videoUrl,
-              type: 'video',
-              extension: 'mp4',
-              filename: `twitter_${tweetId}_720p.mp4`
-            },
-            {
-              label: 'Audio MP3',
-              quality: '128kbps',
-              url: videoUrl,
-              type: 'audio',
-              extension: 'mp3',
-              filename: `twitter_audio_${tweetId}.mp3`
-            }
-          ],
-          musicInfo: { title: 'X Sound Track', author }
-        };
-      }
+    const snData = await scrapeViaSaveNow(url, ['1080', '720', 'mp3'], `X (Twitter) Video ${tweetId}`, 'X User');
+    if (snData && snData.downloadLinks?.length > 0) {
+      return {
+        success: true,
+        platform: 'X (Twitter)',
+        ...snData
+      };
     }
   } catch (e) {
     lastError = e;
@@ -417,7 +446,7 @@ async function downloadTwitter(rawUrl) {
     const twitSaveUrl = `https://twitsave.com/info?url=${encodeURIComponent(`https://twitter.com/i/status/${tweetId}`)}`;
     const response = await axios.get(twitSaveUrl, {
       headers: { 'User-Agent': UA_DESKTOP },
-      timeout: 10000
+      timeout: 8000
     });
 
     const $ = cheerio.load(response.data);
@@ -472,9 +501,10 @@ async function downloadTwitter(rawUrl) {
 
 // ===== YOUTUBE SCRAPER =====
 async function downloadYouTube(rawUrl) {
+  const url = cleanInputUrl(rawUrl);
   let lastError = null;
 
-  const videoIdMatch = rawUrl.match(/(?:v=|shorts\/|youtu\.be\/|embed\/)([A-Za-z0-9_-]{11})/i);
+  const videoIdMatch = url.match(/(?:v=|shorts\/|youtu\.be\/|embed\/)([A-Za-z0-9_-]{11})/i);
   const videoId = videoIdMatch ? videoIdMatch[1] : null;
 
   if (!videoId) {
@@ -482,9 +512,8 @@ async function downloadYouTube(rawUrl) {
   }
 
   const standardUrl = `https://www.youtube.com/watch?v=${videoId}`;
-  const apikey = 'dfcb6d76f2f6a9894gjkege8a4ab232222';
 
-  // 1. Ambil Metadata (Title, Author, Thumbnail)
+  // 1. Ambil Metadata (Title, Author, Thumbnail) secara instan
   let title = `YouTube Video ${videoId}`;
   let author = 'YouTube Creator';
   let thumbnail = `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`;
@@ -496,96 +525,19 @@ async function downloadYouTube(rawUrl) {
     if (oembedRes.data?.thumbnail_url) thumbnail = oembedRes.data.thumbnail_url;
   } catch (_) {}
 
-  // 2. STRATEGI 1: Savenow V2 API (Mendukung 1080p, 720p, dan MP3 Audio)
+  // 2. STRATEGI 1: Savenow V2 Engine (1080p, 720p, MP3)
   try {
-    const formatsToRequest = [
-      { format: '1080', label: 'Resolusi HD 1080p', quality: '1080p (Full HD)', type: 'video', ext: 'mp4' },
-      { format: '720', label: 'Resolusi HD 720p', quality: '720p (Standard HD)', type: 'video', ext: 'mp4' },
-      { format: 'mp3', label: 'Audio MP3', quality: '128kbps', type: 'audio', ext: 'mp3' }
-    ];
-
-    const initPromises = formatsToRequest.map(async item => {
-      try {
-        const apiUrl = `https://p.savenow.to/api/v2/download?format=${item.format}&url=${encodeURIComponent(standardUrl)}&apikey=${apikey}`;
-        const res = await axios.get(apiUrl, {
-          headers: { 'User-Agent': UA_DESKTOP, 'Referer': 'https://y2down.cc/' },
-          timeout: 8000
-        });
-        return { ...item, progressUrl: res.data?.progress_url, downloadUrl: res.data?.download_url };
-      } catch (e) {
-        return { ...item, error: e.message };
-      }
-    });
-
-    const activeTasks = await Promise.all(initPromises);
-    const validTasks = activeTasks.filter(t => t.progressUrl || t.downloadUrl);
-
-    if (validTasks.length > 0) {
-      const pollPromises = validTasks.map(async task => {
-        let finalUrl = task.downloadUrl || null;
-        if (!finalUrl && task.progressUrl) {
-          // Poll hingga selesai (maksimal 10x poll, @ 1.2 detik)
-          for (let i = 0; i < 10; i++) {
-            await new Promise(r => setTimeout(r, 1200));
-            try {
-              const progRes = await axios.get(task.progressUrl, {
-                headers: { 'User-Agent': UA_DESKTOP, 'Referer': 'https://y2down.cc/' },
-                timeout: 5000
-              });
-              if (progRes.data?.download_url) {
-                finalUrl = progRes.data.download_url;
-                break;
-              }
-            } catch (_) {}
-          }
-        }
-
-        if (finalUrl) {
-          return {
-            label: task.label,
-            quality: task.quality,
-            url: finalUrl,
-            type: task.type,
-            extension: task.ext,
-            filename: `youtube_${videoId}_${task.format}.${task.ext}`
-          };
-        }
-        return null;
-      });
-
-      const resolved = (await Promise.all(pollPromises)).filter(Boolean);
-      if (resolved.length > 0) {
-        // Pastikan ada video dan audio
-        const video1080 = resolved.find(r => r.label.includes('1080'));
-        const video720 = resolved.find(r => r.label.includes('720'));
-        const audioMp3 = resolved.find(r => r.type === 'audio');
-
-        const finalLinks = [];
-        if (video1080) finalLinks.push(video1080);
-        if (video720) {
-          finalLinks.push(video720);
-        } else if (video1080) {
-          finalLinks.push({
-            ...video1080,
-            label: 'Resolusi HD 720p',
-            quality: '720p (Standard HD)',
-            filename: `youtube_${videoId}_720p.mp4`
-          });
-        }
-        if (audioMp3) finalLinks.push(audioMp3);
-
-        if (finalLinks.length > 0) {
-          return {
-            success: true,
-            platform: 'YouTube',
-            title,
-            author,
-            thumbnail,
-            downloadLinks: finalLinks,
-            musicInfo: { title, author }
-          };
-        }
-      }
+    const snData = await scrapeViaSaveNow(standardUrl, ['1080', '720', 'mp3'], title, author);
+    if (snData && snData.downloadLinks?.length > 0) {
+      return {
+        success: true,
+        platform: 'YouTube',
+        title: snData.title || title,
+        author: snData.author || author,
+        thumbnail: snData.thumbnail || thumbnail,
+        downloadLinks: snData.downloadLinks,
+        musicInfo: { title: snData.title || title, author: snData.author || author }
+      };
     }
   } catch (e) {
     lastError = e;
@@ -606,11 +558,8 @@ async function downloadYouTube(rawUrl) {
       },
       videoId: videoId
     }, {
-      headers: {
-        'Content-Type': 'application/json',
-        'User-Agent': UA_DESKTOP
-      },
-      timeout: 8000
+      headers: { 'Content-Type': 'application/json', 'User-Agent': UA_DESKTOP },
+      timeout: 6000
     });
 
     const sData = playerRes.data?.streamingData;
@@ -677,8 +626,8 @@ export default async function handler(req, res) {
     return res.status(400).json({ success: false, message: 'URL tidak boleh kosong.' });
   }
 
-  const trimmedUrl = url.trim();
-  const platform = detectPlatform(trimmedUrl);
+  const cleaned = cleanInputUrl(url);
+  const platform = detectPlatform(cleaned);
   if (!platform) {
     return res.status(400).json({
       success: false,
@@ -702,10 +651,10 @@ export default async function handler(req, res) {
 
   try {
     let data;
-    if (platform === 'tiktok') data = await downloadTikTok(trimmedUrl);
-    else if (platform === 'instagram') data = await downloadInstagram(trimmedUrl);
-    else if (platform === 'twitter') data = await downloadTwitter(trimmedUrl);
-    else if (platform === 'youtube') data = await downloadYouTube(trimmedUrl);
+    if (platform === 'tiktok') data = await downloadTikTok(cleaned);
+    else if (platform === 'instagram') data = await downloadInstagram(cleaned);
+    else if (platform === 'twitter') data = await downloadTwitter(cleaned);
+    else if (platform === 'youtube') data = await downloadYouTube(cleaned);
 
     // Format proxy URL untuk download mobile langsung ke penyimpanan/galeri
     if (data?.downloadLinks) {
@@ -717,7 +666,7 @@ export default async function handler(req, res) {
 
     return res.status(200).json({ success: true, data });
   } catch (error) {
-    console.error(`[Scraper Error] Platform: ${platform}, URL: ${trimmedUrl}, Error:`, error.message);
+    console.error(`[Scraper Error] Platform: ${platform}, URL: ${cleaned}, Error:`, error.message);
     return res.status(500).json({
       success: false,
       message: error.message || 'Terjadi kendala saat mengekstrak media. Pastikan link bersifat publik dan dapat diakses.'
