@@ -177,20 +177,40 @@ async function downloadTikTok(url) {
   throw new Error(`Gagal memproses TikTok: ${lastError?.message || 'Video tidak ditemukan'}`);
 }
 
+// ===== HELPER EKSTRAKSI CLEAN INSTAGRAM =====
+function extractCleanIGUrl(html, key) {
+  const marker = `\\"${key}\\":\\"`;
+  const idx = html.indexOf(marker);
+  if (idx === -1) {
+    const marker2 = `"${key}":"`;
+    const idx2 = html.indexOf(marker2);
+    if (idx2 === -1) return null;
+    const start = idx2 + marker2.length;
+    const end = html.indexOf(`"`, start);
+    if (end === -1) return null;
+    return html.substring(start, end).replace(/\\\\\//g, '/').replace(/\\\//g, '/').replace(/\\u0026/g, '&');
+  }
+  const start = idx + marker.length;
+  const end = html.indexOf(`\\"`, start);
+  if (end === -1) return null;
+  let raw = html.substring(start, end);
+  return raw.replace(/\\\\\//g, '/').replace(/\\\//g, '/').replace(/\\u0026/g, '&');
+}
+
 // ===== INSTAGRAM SCRAPER =====
 async function downloadInstagram(rawUrl) {
   let lastError = null;
 
-  // Bersihkan URL dari parameter tracking (?igsh=..., &utm_source=..., dll)
+  // Bersihkan URL dan ambil shortcode
   let cleanUrl = rawUrl.trim().split('?')[0].replace(/\/+$/, '');
   const shortcodeMatch = cleanUrl.match(/(?:reel|reels|p|tv|stories|share)\/([A-Za-z0-9_-]+)/i);
   const shortcode = shortcodeMatch ? shortcodeMatch[1] : null;
 
   if (!shortcode) {
-    throw new Error('Link Instagram tidak valid. Pastikan memasukkan link Reels atau Postingan yang benar.');
+    throw new Error('Link Instagram tidak valid. Masukkan link Reels, Postingan, atau TV Instagram yang benar.');
   }
 
-  // STRATEGI 1: Instagram Embed Extraction via Cheerio
+  // STRATEGI 1: Instagram Embed Extraction (Substrings Parser)
   try {
     const embedUrl = `https://www.instagram.com/p/${shortcode}/embed/captioned/`;
     const res = await axios.get(embedUrl, {
@@ -199,25 +219,24 @@ async function downloadInstagram(rawUrl) {
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
         'Accept-Language': 'en-US,en;q=0.9'
       },
-      timeout: 9000
+      timeout: 10000
     });
 
     const html = res.data;
+    const videoUrl = extractCleanIGUrl(html, 'video_url');
+    const displayUrl = extractCleanIGUrl(html, 'display_url');
+
     const $ = cheerio.load(html);
     const caption = $('.Caption').text().trim() || $('div.Caption').text().trim() || `Instagram Media (${shortcode})`;
     const author = $('.Avatar img').attr('alt') || 'Instagram User';
 
-    const videoMatch = html.match(/"video_url":"([^"]+)"/) || html.match(/video_url\s*:\s*"([^"]+)"/);
-    const displayMatch = html.match(/"display_url":"([^"]+)"/) || html.match(/display_url\s*:\s*"([^"]+)"/);
-
-    if (videoMatch && videoMatch[1]) {
-      const videoUrl = JSON.parse(`"${videoMatch[1]}"`);
+    if (videoUrl) {
       return {
         success: true,
         platform: 'Instagram',
         title: caption,
         author: author,
-        thumbnail: displayMatch ? JSON.parse(`"${displayMatch[1]}"`) : null,
+        thumbnail: displayUrl || null,
         downloadLinks: [
           {
             label: 'Resolusi HD 1080p',
@@ -248,19 +267,18 @@ async function downloadInstagram(rawUrl) {
       };
     }
 
-    if (displayMatch && displayMatch[1]) {
-      const imgUrl = JSON.parse(`"${displayMatch[1]}"`);
+    if (displayUrl) {
       return {
         success: true,
         platform: 'Instagram',
         title: caption,
         author: author,
-        thumbnail: imgUrl,
+        thumbnail: displayUrl,
         downloadLinks: [
           {
             label: 'Foto HD (Original)',
             quality: 'High Resolution',
-            url: imgUrl,
+            url: displayUrl,
             type: 'image',
             extension: 'jpg',
             filename: `instagram_${shortcode}.jpg`
@@ -272,7 +290,7 @@ async function downloadInstagram(rawUrl) {
     lastError = e;
   }
 
-  // STRATEGI 2: SnapSave Media Service
+  // STRATEGI 2: SnapSave Fallback
   try {
     const snapRes = await axios.post('https://snapinsta.app/action.php', new URLSearchParams({
       url: `https://www.instagram.com/reel/${shortcode}/`,
@@ -304,7 +322,6 @@ async function downloadInstagram(rawUrl) {
       });
 
       if (downloadLinks.length > 0) {
-        // Tambahkan opsi MP3 audio
         downloadLinks.push({
           label: 'Audio MP3',
           quality: '128kbps',
@@ -329,63 +346,6 @@ async function downloadInstagram(rawUrl) {
     lastError = e;
   }
 
-  // STRATEGI 3: FastDL Scraper
-  try {
-    const fastRes = await axios.post('https://fastdl.app/c/', new URLSearchParams({
-      url: `https://www.instagram.com/reel/${shortcode}/`,
-      lang_code: 'en'
-    }), {
-      headers: {
-        'User-Agent': UA_DESKTOP,
-        'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
-        'Referer': 'https://fastdl.app/'
-      },
-      timeout: 10000
-    });
-
-    const $ = cheerio.load(fastRes.data);
-    const downloadLinks = [];
-    $('a.download-items__btn, a.btn-download, a[download]').each((i, el) => {
-      const href = $(el).attr('href');
-      if (href && !href.startsWith('javascript')) {
-        const isVideo = href.includes('.mp4') || href.includes('video');
-        downloadLinks.push({
-          label: isVideo ? `Resolusi HD ${i === 0 ? '1080p' : '720p'}` : `Download Foto #${i + 1}`,
-          quality: isVideo ? (i === 0 ? '1080p (Full HD)' : '720p (Standard HD)') : 'HD Image',
-          url: href,
-          type: isVideo ? 'video' : 'image',
-          extension: isVideo ? 'mp4' : 'jpg',
-          filename: `instagram_${shortcode}_${i + 1}.${isVideo ? 'mp4' : 'jpg'}`
-        });
-      }
-    });
-
-    if (downloadLinks.length > 0) {
-      if (downloadLinks[0].type === 'video') {
-        downloadLinks.push({
-          label: 'Audio MP3',
-          quality: '128kbps',
-          url: downloadLinks[0].url,
-          type: 'audio',
-          extension: 'mp3',
-          filename: `instagram_audio_${shortcode}.mp3`
-        });
-      }
-
-      return {
-        success: true,
-        platform: 'Instagram',
-        title: `Instagram Media (${shortcode})`,
-        author: 'Instagram User',
-        thumbnail: $('img').first().attr('src') || null,
-        downloadLinks,
-        musicInfo: { title: 'Instagram Audio Track', author: 'Instagram User' }
-      };
-    }
-  } catch (e) {
-    lastError = e;
-  }
-
   throw new Error(`Tidak dapat menemukan media dari Instagram. Pastikan akun tidak diprivat dan link Reels/Postingan bersifat publik.`);
 }
 
@@ -393,7 +353,6 @@ async function downloadInstagram(rawUrl) {
 async function downloadTwitter(rawUrl) {
   let lastError = null;
 
-  // Ekstrak Tweet ID & bersihkan query string mobile
   const cleanUrl = rawUrl.trim().split('?')[0];
   const tweetIdMatch = cleanUrl.match(/status\/(\d+)/i);
   const tweetId = tweetIdMatch ? tweetIdMatch[1] : null;
@@ -402,79 +361,24 @@ async function downloadTwitter(rawUrl) {
     throw new Error('ID Tweet tidak ditemukan. Masukkan link postingan X (Twitter) yang valid.');
   }
 
-  // STRATEGI 1: TwitSave Scraper
-  try {
-    const twitSaveUrl = `https://twitsave.com/info?url=${encodeURIComponent(`https://twitter.com/i/status/${tweetId}`)}`;
-    const response = await axios.get(twitSaveUrl, {
-      headers: { 'User-Agent': UA_DESKTOP },
-      timeout: 10000
-    });
-
-    const $ = cheerio.load(response.data);
-    const title = $('div.leading-tight h2, p.text-gray-600, div.leading-tight p').first().text().trim() || 'X (Twitter) Video';
-    const thumbnail = $('div.aspect-w-16 img, div.w-full img, img[src*="twimg"]').first().attr('src') || null;
-    const downloadLinks = [];
-
-    $('a[href*="download"], a.btn-primary, a[download]').each((_, el) => {
-      const link = $(el).attr('href');
-      const text = $(el).text().trim();
-
-      if (link && (link.startsWith('http') || link.startsWith('/download'))) {
-        const fullUrl = link.startsWith('http') ? link : `https://twitsave.com${link}`;
-        const is1080 = text.includes('1080') || text.includes('HD');
-        downloadLinks.push({
-          label: is1080 ? 'Resolusi HD 1080p' : 'Resolusi HD 720p',
-          quality: is1080 ? '1080p (Full HD)' : '720p (Standard HD)',
-          url: fullUrl,
-          type: 'video',
-          extension: 'mp4',
-          filename: `twitter_${tweetId}_${is1080 ? '1080p' : '720p'}.mp4`
-        });
-      }
-    });
-
-    if (downloadLinks.length > 0) {
-      // Tambahkan opsi audio MP3
-      downloadLinks.push({
-        label: 'Audio MP3',
-        quality: '128kbps',
-        url: downloadLinks[0].url,
-        type: 'audio',
-        extension: 'mp3',
-        filename: `twitter_audio_${tweetId}.mp3`
-      });
-
-      return {
-        success: true,
-        platform: 'X (Twitter)',
-        title,
-        author: 'X User',
-        thumbnail,
-        downloadLinks,
-        musicInfo: { title: 'X Sound Track', author: 'X User' }
-      };
-    }
-  } catch (e) {
-    lastError = e;
-  }
-
-  // STRATEGI 2: VxTwitter API
+  // STRATEGI 1: VxTwitter Open Engine
   try {
     const vxRes = await axios.get(`https://api.vxtwitter.com/Twitter/status/${tweetId}`, {
       headers: { 'User-Agent': UA_DESKTOP },
       timeout: 8000
     });
-    if (vxRes.data && (vxRes.data.mediaURLs?.length > 0 || vxRes.data.video_url)) {
-      const videoUrl = vxRes.data.video_url || vxRes.data.mediaURLs?.find(u => u.includes('.mp4'));
+    if (vxRes.data) {
+      const item = vxRes.data;
+      const videoUrl = item.video_url || item.mediaURLs?.find(u => u.includes('.mp4') || u.includes('video'));
       if (videoUrl) {
-        const author = vxRes.data.user_name || vxRes.data.user_screen_name || 'X User';
-        const title = vxRes.data.text || 'X Video';
+        const author = item.user_name || item.user_screen_name || 'X User';
+        const title = item.text || 'X Video';
         return {
           success: true,
           platform: 'X (Twitter)',
           title,
           author,
-          thumbnail: vxRes.data.mediaURLs?.[0] || null,
+          thumbnail: item.mediaURLs?.[0] || null,
           downloadLinks: [
             {
               label: 'Resolusi HD 1080p',
@@ -509,6 +413,61 @@ async function downloadTwitter(rawUrl) {
     lastError = e;
   }
 
+  // STRATEGI 2: TwitSave Scraper
+  try {
+    const twitSaveUrl = `https://twitsave.com/info?url=${encodeURIComponent(`https://twitter.com/i/status/${tweetId}`)}`;
+    const response = await axios.get(twitSaveUrl, {
+      headers: { 'User-Agent': UA_DESKTOP },
+      timeout: 10000
+    });
+
+    const $ = cheerio.load(response.data);
+    const title = $('div.leading-tight h2, p.text-gray-600, div.leading-tight p').first().text().trim() || 'X (Twitter) Video';
+    const thumbnail = $('div.aspect-w-16 img, div.w-full img, img[src*="twimg"]').first().attr('src') || null;
+    const downloadLinks = [];
+
+    $('a[href*="download"], a.btn-primary, a[download]').each((_, el) => {
+      const link = $(el).attr('href');
+      const text = $(el).text().trim();
+
+      if (link && (link.startsWith('http') || link.startsWith('/download'))) {
+        const fullUrl = link.startsWith('http') ? link : `https://twitsave.com${link}`;
+        const is1080 = text.includes('1080') || text.includes('HD');
+        downloadLinks.push({
+          label: is1080 ? 'Resolusi HD 1080p' : 'Resolusi HD 720p',
+          quality: is1080 ? '1080p (Full HD)' : '720p (Standard HD)',
+          url: fullUrl,
+          type: 'video',
+          extension: 'mp4',
+          filename: `twitter_${tweetId}_${is1080 ? '1080p' : '720p'}.mp4`
+        });
+      }
+    });
+
+    if (downloadLinks.length > 0) {
+      downloadLinks.push({
+        label: 'Audio MP3',
+        quality: '128kbps',
+        url: downloadLinks[0].url,
+        type: 'audio',
+        extension: 'mp3',
+        filename: `twitter_audio_${tweetId}.mp3`
+      });
+
+      return {
+        success: true,
+        platform: 'X (Twitter)',
+        title,
+        author: 'X User',
+        thumbnail,
+        downloadLinks,
+        musicInfo: { title: 'X Sound Track', author: 'X User' }
+      };
+    }
+  } catch (e) {
+    lastError = e;
+  }
+
   throw new Error(`Gagal mengambil video dari X (Twitter). Pastikan tweet bersifat publik dan mengandung video.`);
 }
 
@@ -516,7 +475,6 @@ async function downloadTwitter(rawUrl) {
 async function downloadYouTube(rawUrl) {
   let lastError = null;
 
-  // Ekstrak YouTube Video ID (mendukung shorts, live, youtu.be, watch?v=)
   const videoIdMatch = rawUrl.match(/(?:v=|shorts\/|youtu\.be\/|embed\/)([A-Za-z0-9_-]{11})/i);
   const videoId = videoIdMatch ? videoIdMatch[1] : null;
 
@@ -554,12 +512,11 @@ async function downloadYouTube(rawUrl) {
       const adaptive = sData.adaptiveFormats || [];
       const downloadLinks = [];
 
-      // Ambil stream video dan stream audio
       const progressiveVideos = formats.filter(f => f.url && f.mimeType?.includes('video'));
       const adaptiveVideos = adaptive.filter(f => f.url && f.mimeType?.includes('video'));
       const directAudios = adaptive.filter(f => f.url && f.mimeType?.includes('audio'));
 
-      // Format 1080p
+      // 1080p Format
       const hd1080 = adaptiveVideos.find(f => f.qualityLabel?.includes('1080')) || progressiveVideos[0] || adaptiveVideos[0];
       if (hd1080 && hd1080.url) {
         downloadLinks.push({
@@ -572,7 +529,7 @@ async function downloadYouTube(rawUrl) {
         });
       }
 
-      // Format 720p / standard
+      // 720p / standard format
       const hd720 = progressiveVideos.find(f => f.qualityLabel?.includes('720')) || progressiveVideos[0] || adaptiveVideos.find(f => f.qualityLabel?.includes('720'));
       if (hd720 && hd720.url) {
         downloadLinks.push({
@@ -585,7 +542,7 @@ async function downloadYouTube(rawUrl) {
         });
       }
 
-      // Format Audio MP3
+      // Audio MP3 format
       const bestAudio = directAudios.find(a => a.mimeType?.includes('mp4a')) || directAudios[0];
       if (bestAudio && bestAudio.url) {
         downloadLinks.push({
@@ -703,7 +660,6 @@ async function downloadYouTube(rawUrl) {
 
 // ===== MAIN SERVERLESS ROUTE HANDLER =====
 export default async function handler(req, res) {
-  // Set CORS headers
   res.setHeader('Access-Control-Allow-Credentials', true);
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
@@ -747,7 +703,7 @@ export default async function handler(req, res) {
     else if (platform === 'twitter') data = await downloadTwitter(trimmedUrl);
     else if (platform === 'youtube') data = await downloadYouTube(trimmedUrl);
 
-    // Format proxy URL untuk mempermudah download mobile
+    // Format proxy URL untuk download mobile langsung ke penyimpanan/galeri
     if (data?.downloadLinks) {
       data.downloadLinks = data.downloadLinks.map(item => ({
         ...item,
