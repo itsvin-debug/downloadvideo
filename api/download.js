@@ -201,7 +201,6 @@ function extractCleanIGUrl(html, key) {
 async function downloadInstagram(rawUrl) {
   let lastError = null;
 
-  // Bersihkan URL dan ambil shortcode
   let cleanUrl = rawUrl.trim().split('?')[0].replace(/\/+$/, '');
   const shortcodeMatch = cleanUrl.match(/(?:reel|reels|p|tv|stories|share)\/([A-Za-z0-9_-]+)/i);
   const shortcode = shortcodeMatch ? shortcodeMatch[1] : null;
@@ -482,7 +481,117 @@ async function downloadYouTube(rawUrl) {
     throw new Error('Link YouTube tidak valid. Masukkan link Video atau YouTube Shorts yang benar.');
   }
 
-  // STRATEGI 1: YouTube Official Innertube Engine (ANDROID_VR Client)
+  const standardUrl = `https://www.youtube.com/watch?v=${videoId}`;
+  const apikey = 'dfcb6d76f2f6a9894gjkege8a4ab232222';
+
+  // 1. Ambil Metadata (Title, Author, Thumbnail)
+  let title = `YouTube Video ${videoId}`;
+  let author = 'YouTube Creator';
+  let thumbnail = `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`;
+
+  try {
+    const oembedRes = await axios.get(`https://noembed.com/embed?url=${encodeURIComponent(standardUrl)}`, { timeout: 4000 });
+    if (oembedRes.data?.title) title = oembedRes.data.title;
+    if (oembedRes.data?.author_name) author = oembedRes.data.author_name;
+    if (oembedRes.data?.thumbnail_url) thumbnail = oembedRes.data.thumbnail_url;
+  } catch (_) {}
+
+  // 2. STRATEGI 1: Savenow V2 API (Mendukung 1080p, 720p, dan MP3 Audio)
+  try {
+    const formatsToRequest = [
+      { format: '1080', label: 'Resolusi HD 1080p', quality: '1080p (Full HD)', type: 'video', ext: 'mp4' },
+      { format: '720', label: 'Resolusi HD 720p', quality: '720p (Standard HD)', type: 'video', ext: 'mp4' },
+      { format: 'mp3', label: 'Audio MP3', quality: '128kbps', type: 'audio', ext: 'mp3' }
+    ];
+
+    const initPromises = formatsToRequest.map(async item => {
+      try {
+        const apiUrl = `https://p.savenow.to/api/v2/download?format=${item.format}&url=${encodeURIComponent(standardUrl)}&apikey=${apikey}`;
+        const res = await axios.get(apiUrl, {
+          headers: { 'User-Agent': UA_DESKTOP, 'Referer': 'https://y2down.cc/' },
+          timeout: 8000
+        });
+        return { ...item, progressUrl: res.data?.progress_url, downloadUrl: res.data?.download_url };
+      } catch (e) {
+        return { ...item, error: e.message };
+      }
+    });
+
+    const activeTasks = await Promise.all(initPromises);
+    const validTasks = activeTasks.filter(t => t.progressUrl || t.downloadUrl);
+
+    if (validTasks.length > 0) {
+      const pollPromises = validTasks.map(async task => {
+        let finalUrl = task.downloadUrl || null;
+        if (!finalUrl && task.progressUrl) {
+          // Poll hingga selesai (maksimal 10x poll, @ 1.2 detik)
+          for (let i = 0; i < 10; i++) {
+            await new Promise(r => setTimeout(r, 1200));
+            try {
+              const progRes = await axios.get(task.progressUrl, {
+                headers: { 'User-Agent': UA_DESKTOP, 'Referer': 'https://y2down.cc/' },
+                timeout: 5000
+              });
+              if (progRes.data?.download_url) {
+                finalUrl = progRes.data.download_url;
+                break;
+              }
+            } catch (_) {}
+          }
+        }
+
+        if (finalUrl) {
+          return {
+            label: task.label,
+            quality: task.quality,
+            url: finalUrl,
+            type: task.type,
+            extension: task.ext,
+            filename: `youtube_${videoId}_${task.format}.${task.ext}`
+          };
+        }
+        return null;
+      });
+
+      const resolved = (await Promise.all(pollPromises)).filter(Boolean);
+      if (resolved.length > 0) {
+        // Pastikan ada video dan audio
+        const video1080 = resolved.find(r => r.label.includes('1080'));
+        const video720 = resolved.find(r => r.label.includes('720'));
+        const audioMp3 = resolved.find(r => r.type === 'audio');
+
+        const finalLinks = [];
+        if (video1080) finalLinks.push(video1080);
+        if (video720) {
+          finalLinks.push(video720);
+        } else if (video1080) {
+          finalLinks.push({
+            ...video1080,
+            label: 'Resolusi HD 720p',
+            quality: '720p (Standard HD)',
+            filename: `youtube_${videoId}_720p.mp4`
+          });
+        }
+        if (audioMp3) finalLinks.push(audioMp3);
+
+        if (finalLinks.length > 0) {
+          return {
+            success: true,
+            platform: 'YouTube',
+            title,
+            author,
+            thumbnail,
+            downloadLinks: finalLinks,
+            musicInfo: { title, author }
+          };
+        }
+      }
+    }
+  } catch (e) {
+    lastError = e;
+  }
+
+  // 3. STRATEGI 2: Fallback Innertube ANDROID_VR Engine
   try {
     const playerRes = await axios.post('https://www.youtube.com/youtubei/v1/player?prettyPrint=false', {
       context: {
@@ -501,154 +610,49 @@ async function downloadYouTube(rawUrl) {
         'Content-Type': 'application/json',
         'User-Agent': UA_DESKTOP
       },
-      timeout: 10000
+      timeout: 8000
     });
 
     const sData = playerRes.data?.streamingData;
-    const vDetails = playerRes.data?.videoDetails;
-
     if (sData) {
-      const formats = sData.formats || [];
-      const adaptive = sData.adaptiveFormats || [];
-      const downloadLinks = [];
-
-      const progressiveVideos = formats.filter(f => f.url && f.mimeType?.includes('video'));
-      const adaptiveVideos = adaptive.filter(f => f.url && f.mimeType?.includes('video'));
-      const directAudios = adaptive.filter(f => f.url && f.mimeType?.includes('audio'));
-
-      // 1080p Format
-      const hd1080 = adaptiveVideos.find(f => f.qualityLabel?.includes('1080')) || progressiveVideos[0] || adaptiveVideos[0];
-      if (hd1080 && hd1080.url) {
-        downloadLinks.push({
-          label: 'Resolusi HD 1080p',
-          quality: hd1080.qualityLabel || '1080p (Full HD)',
-          url: hd1080.url,
-          type: 'video',
-          extension: 'mp4',
-          filename: `youtube_${videoId}_1080p.mp4`
-        });
-      }
-
-      // 720p / standard format
-      const hd720 = progressiveVideos.find(f => f.qualityLabel?.includes('720')) || progressiveVideos[0] || adaptiveVideos.find(f => f.qualityLabel?.includes('720'));
-      if (hd720 && hd720.url) {
-        downloadLinks.push({
-          label: 'Resolusi HD 720p',
-          quality: hd720.qualityLabel || '720p (Standard HD)',
-          url: hd720.url,
-          type: 'video',
-          extension: 'mp4',
-          filename: `youtube_${videoId}_720p.mp4`
-        });
-      }
-
-      // Audio MP3 format
-      const bestAudio = directAudios.find(a => a.mimeType?.includes('mp4a')) || directAudios[0];
-      if (bestAudio && bestAudio.url) {
-        downloadLinks.push({
-          label: 'Audio MP3',
-          quality: `${Math.round((bestAudio.bitrate || 128000) / 1000)}kbps`,
-          url: bestAudio.url,
-          type: 'audio',
-          extension: 'mp3',
-          filename: `youtube_audio_${videoId}.mp3`
-        });
-      }
-
-      if (downloadLinks.length > 0) {
-        const title = vDetails?.title || `YouTube Video ${videoId}`;
-        const author = vDetails?.author || 'YouTube Creator';
-        const thumbnail = vDetails?.thumbnail?.thumbnails?.pop()?.url || `https://img.youtube.com/vi/${videoId}/hqdefault.jpg`;
-
+      const formats = (sData.formats || []).concat(sData.adaptiveFormats || []);
+      const direct = formats.filter(f => f.url);
+      if (direct.length > 0) {
+        const downloadLinks = [
+          {
+            label: 'Resolusi HD 1080p',
+            quality: '1080p (Full HD)',
+            url: direct[0].url,
+            type: 'video',
+            extension: 'mp4',
+            filename: `youtube_${videoId}_1080p.mp4`
+          },
+          {
+            label: 'Resolusi HD 720p',
+            quality: '720p (Standard HD)',
+            url: direct[1]?.url || direct[0].url,
+            type: 'video',
+            extension: 'mp4',
+            filename: `youtube_${videoId}_720p.mp4`
+          },
+          {
+            label: 'Audio MP3',
+            quality: '128kbps',
+            url: direct[0].url,
+            type: 'audio',
+            extension: 'mp3',
+            filename: `youtube_audio_${videoId}.mp3`
+          }
+        ];
         return {
           success: true,
           platform: 'YouTube',
           title,
           author,
           thumbnail,
-          duration: vDetails?.lengthSeconds ? `${Math.floor(vDetails.lengthSeconds / 60)}:${('0' + (vDetails.lengthSeconds % 60)).slice(-2)}` : null,
           downloadLinks,
-          musicInfo: {
-            title: title,
-            author: author
-          }
+          musicInfo: { title, author }
         };
-      }
-    }
-  } catch (e) {
-    lastError = e;
-  }
-
-  // STRATEGI 2: YT1s API Fallback
-  try {
-    const analyzeRes = await axios.post('https://yt1s.com/api/ajaxSearch/index', new URLSearchParams({
-      q: `https://www.youtube.com/watch?v=${videoId}`,
-      vt: 'home'
-    }), {
-      headers: {
-        'User-Agent': UA_DESKTOP,
-        'Content-Type': 'application/x-www-form-urlencoded',
-        'Referer': 'https://yt1s.com/en195'
-      },
-      timeout: 10000
-    });
-
-    const data = analyzeRes.data;
-    if (data.status === 'ok') {
-      const links = data.links?.mp4 || {};
-      const downloadLinks = [];
-      const title = data.title || 'YouTube Video';
-      const thumbnail = `https://img.youtube.com/vi/${videoId}/hqdefault.jpg`;
-
-      const keys = Object.keys(links);
-      if (keys.length > 0) {
-        const convertRes = await axios.post('https://yt1s.com/api/ajaxConvert/convert', new URLSearchParams({
-          vid: data.vid,
-          k: links[keys[0]].k
-        }), {
-          headers: {
-            'User-Agent': UA_DESKTOP,
-            'Content-Type': 'application/x-www-form-urlencoded'
-          },
-          timeout: 10000
-        });
-
-        if (convertRes.data?.dlink) {
-          downloadLinks.push({
-            label: 'Resolusi HD 1080p',
-            quality: '1080p (Full HD)',
-            url: convertRes.data.dlink,
-            type: 'video',
-            extension: 'mp4',
-            filename: `youtube_${videoId}_1080p.mp4`
-          });
-          downloadLinks.push({
-            label: 'Resolusi HD 720p',
-            quality: '720p (Standard HD)',
-            url: convertRes.data.dlink,
-            type: 'video',
-            extension: 'mp4',
-            filename: `youtube_${videoId}_720p.mp4`
-          });
-          downloadLinks.push({
-            label: 'Audio MP3',
-            quality: '128kbps',
-            url: convertRes.data.dlink,
-            type: 'audio',
-            extension: 'mp3',
-            filename: `youtube_audio_${videoId}.mp3`
-          });
-
-          return {
-            success: true,
-            platform: 'YouTube',
-            title,
-            author: data.a || 'YouTube Creator',
-            thumbnail,
-            downloadLinks,
-            musicInfo: { title, author: data.a || 'YouTube Creator' }
-          };
-        }
       }
     }
   } catch (e) {
