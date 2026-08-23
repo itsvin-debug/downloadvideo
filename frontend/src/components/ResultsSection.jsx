@@ -29,40 +29,41 @@ export default function ResultsSection({ result, preferredFormat = '1080p', onRe
   // link video aktif yang dipilih user
   const activeVideo = videoLinks[selectedQualityIndex] || videoLinks[0];
 
-  // fungsi buat eksekusi download file langsung ke galeri/penyimpanan
-  const handleDownload = (mediaItem) => {
+  // fungsi download pakai fetch + blob agar file beneran tersimpan ke galeri HP / folder Downloads
+  const handleDownload = async (mediaItem) => {
+    setDownloading(true);
+    confetti({ particleCount: 60, spread: 50, origin: { y: 0.7 } });
+
+    const filename = mediaItem.filename || 'kaze_download.mp4';
+
+    // proxyUrl sudah pakai path relatif /api/proxy-download dari Vercel serverless function
+    const proxyUrl = mediaItem.proxyUrl
+      ? mediaItem.proxyUrl  // sudah relatif: /api/proxy-download?url=...
+      : `/api/proxy-download?url=${encodeURIComponent(mediaItem.url)}&filename=${encodeURIComponent(filename)}`;
+
     try {
-      setDownloading(true);
+      // fetch dulu biar dapat blob, baru trigger save — cara ini yang bikin file masuk galeri HP
+      const response = await fetch(proxyUrl);
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
 
-      // efek confetti buat rayain download berhasil
-      confetti({
-        particleCount: 60,
-        spread: 50,
-        origin: { y: 0.7 }
-      });
+      const blob = await response.blob();
+      const blobUrl = URL.createObjectURL(blob);
 
-      // tentukan host proxy backend (support Vercel / environment variable)
-      const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:5000';
-
-      // gunakan url proxy dari backend agar otomatis terunduh ke folder Downloads/Galeri tanpa kena blokir CORS
-      const downloadTarget = mediaItem.proxyUrl 
-        ? `${apiUrl}${mediaItem.proxyUrl}` 
-        : mediaItem.url;
-
-      // bikin link bayangan buat mentrigger save dialog di browser
       const tempLink = document.createElement('a');
-      tempLink.href = downloadTarget;
-      tempLink.setAttribute('download', mediaItem.filename || 'kaze_media.mp4');
-      tempLink.setAttribute('target', '_blank');
+      tempLink.href = blobUrl;
+      tempLink.setAttribute('download', filename);
       document.body.appendChild(tempLink);
       tempLink.click();
       document.body.removeChild(tempLink);
 
+      // bersihkan blob URL setelah sedikit delay
+      setTimeout(() => URL.revokeObjectURL(blobUrl), 5000);
     } catch (err) {
-      console.error('Gagal mengunduh file:', err);
+      console.warn('Blob download gagal, fallback ke direct link:', err.message);
+      // fallback: buka link langsung di tab baru kalau blob gagal
       window.open(mediaItem.url, '_blank');
     } finally {
-      setTimeout(() => setDownloading(false), 1200);
+      setTimeout(() => setDownloading(false), 1500);
     }
   };
 

@@ -70,18 +70,13 @@ export default function ConverterScreen({ activePlatform, onBack }) {
     try {
       setLoading(true);
 
-      // tentukan url API backend (bisa via env saat deploy ke production)
-      const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:5000';
-
-      // tembak endpoint backend Express kita
-      const response = await axios.post(`${apiUrl}/api/download`, {
+      // pakai URL relatif /api/download — Vercel serverless function, ga perlu backend terpisah
+      const response = await axios.post('/api/download', {
         url: trimmedUrl,
         expectedPlatform: activePlatform
       }, {
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        timeout: 25000
+        headers: { 'Content-Type': 'application/json' },
+        timeout: 30000
       });
 
       if (response.data && response.data.success && response.data.data) {
