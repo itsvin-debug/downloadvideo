@@ -1,18 +1,14 @@
 {
   "buildCommand": "cd frontend && npm install && npm run build",
   "outputDirectory": "frontend/dist",
-  "installCommand": "cd frontend && npm install && cd ../api && npm install",
-  "functions": {
-    "api/download.js": {
-      "maxDuration": 30
-    },
-    "api/proxy-download.js": {
-      "maxDuration": 30
-    }
-  },
   "rewrites": [
-    { "source": "/api/download", "destination": "/api/download" },
-    { "source": "/api/proxy-download", "destination": "/api/proxy-download" },
-    { "source": "/(.*)", "destination": "/index.html" }
+    {
+      "source": "/api/(.*)",
+      "destination": "/api/$1"
+    },
+    {
+      "source": "/((?!api/).*)",
+      "destination": "/index.html"
+    }
   ]
 }
