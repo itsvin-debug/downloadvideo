@@ -16,24 +16,41 @@ export default async function handler(req, res) {
 
   try {
     const decodedUrl = decodeURIComponent(url);
+
+    // Tentukan referer yang cocok sesuai domain target
+    let referer = undefined;
+    if (decodedUrl.includes('tiktok') || decodedUrl.includes('tikcdn')) {
+      referer = 'https://www.tiktok.com/';
+    } else if (decodedUrl.includes('instagram') || decodedUrl.includes('cdninstagram') || decodedUrl.includes('fbcdn')) {
+      referer = 'https://www.instagram.com/';
+    } else if (decodedUrl.includes('twimg') || decodedUrl.includes('twitter') || decodedUrl.includes('x.com')) {
+      referer = 'https://twitter.com/';
+    } else if (decodedUrl.includes('googlevideo') || decodedUrl.includes('youtube') || decodedUrl.includes('ytimg')) {
+      referer = 'https://www.youtube.com/';
+    }
+
+    const headers = {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
+    };
+    if (referer) headers['Referer'] = referer;
+
     const response = await axios({
       method: 'GET',
       url: decodedUrl,
       responseType: 'stream',
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-        'Referer': 'https://www.tiktok.com/'
-      },
+      headers,
       timeout: 30000
     });
 
     res.setHeader('Content-Disposition', `attachment; filename="${safeFilename}"`);
     res.setHeader('Content-Type', response.headers['content-type'] || 'application/octet-stream');
-    if (response.headers['content-length']) res.setHeader('Content-Length', response.headers['content-length']);
+    if (response.headers['content-length']) {
+      res.setHeader('Content-Length', response.headers['content-length']);
+    }
 
     response.data.pipe(res);
   } catch (error) {
-    console.error('Proxy error:', error.message);
+    console.error('Proxy stream error:', error.message);
     return res.redirect(302, decodeURIComponent(url));
   }
 }

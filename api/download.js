@@ -104,7 +104,7 @@ async function downloadTikTok(url) {
     lastError = e;
   }
 
-  // Strategi 2: TikWM Scraper Fallback
+  // Strategi 2: TikWM Fallback
   try {
     const res = await axios.post('https://www.tikwm.com/api/', new URLSearchParams({
       url: url.trim(),
@@ -181,76 +181,31 @@ async function downloadTikTok(url) {
 async function downloadInstagram(rawUrl) {
   let lastError = null;
 
-  // Bersihkan URL dan ambil shortcode
-  const cleanUrl = rawUrl.split('?')[0].replace(/\/+$/, '');
-  const shortcodeMatch = cleanUrl.match(/(?:reel|reels|p|tv|stories)\/([A-Za-z0-9_-]+)/i);
+  // Bersihkan URL dari parameter tracking (?igsh=..., &utm_source=..., dll)
+  let cleanUrl = rawUrl.trim().split('?')[0].replace(/\/+$/, '');
+  const shortcodeMatch = cleanUrl.match(/(?:reel|reels|p|tv|stories|share)\/([A-Za-z0-9_-]+)/i);
   const shortcode = shortcodeMatch ? shortcodeMatch[1] : null;
 
   if (!shortcode) {
-    throw new Error('Link Instagram tidak valid. Masukkan link Reels, Postingan, atau TV Instagram yang lengkap.');
+    throw new Error('Link Instagram tidak valid. Pastikan memasukkan link Reels atau Postingan yang benar.');
   }
 
-  // STRATEGI 1: SnapSave Media Scraper
-  try {
-    const snapRes = await axios.post('https://snapinsta.app/action.php', new URLSearchParams({
-      url: `https://www.instagram.com/reel/${shortcode}/`,
-      action: 'post'
-    }), {
-      headers: {
-        'User-Agent': UA_DESKTOP,
-        'Content-Type': 'application/x-www-form-urlencoded'
-      },
-      timeout: 9000
-    });
-
-    const snapHtml = typeof snapRes.data === 'string' ? snapRes.data : snapRes.data?.data || '';
-    if (snapHtml && snapHtml.includes('http')) {
-      const $ = cheerio.load(snapHtml);
-      const downloadLinks = [];
-      $('a[href^="http"]').each((i, el) => {
-        const href = $(el).attr('href');
-        if (href && (href.includes('cdninstagram') || href.includes('fbcdn') || href.includes('snapinsta') || href.includes('download'))) {
-          downloadLinks.push({
-            label: i === 0 ? 'Resolusi HD 1080p' : 'Resolusi HD 720p',
-            quality: i === 0 ? '1080p (Full HD)' : '720p (Standard HD)',
-            url: href,
-            type: 'video',
-            extension: 'mp4',
-            filename: `instagram_${shortcode}_${i === 0 ? '1080p' : '720p'}.mp4`
-          });
-        }
-      });
-
-      if (downloadLinks.length > 0) {
-        return {
-          success: true,
-          platform: 'Instagram',
-          title: `Instagram Video ${shortcode}`,
-          author: 'Instagram User',
-          thumbnail: $('img').first().attr('src') || null,
-          downloadLinks
-        };
-      }
-    }
-  } catch (e) {
-    lastError = e;
-  }
-
-  // STRATEGI 2: Instagram Embed HTML5 Inspection
+  // STRATEGI 1: Instagram Embed Extraction via Cheerio
   try {
     const embedUrl = `https://www.instagram.com/p/${shortcode}/embed/captioned/`;
     const res = await axios.get(embedUrl, {
       headers: {
         'User-Agent': UA_MOBILE,
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.9'
       },
-      timeout: 10000
+      timeout: 9000
     });
 
     const html = res.data;
     const $ = cheerio.load(html);
     const caption = $('.Caption').text().trim() || $('div.Caption').text().trim() || `Instagram Media (${shortcode})`;
-    const author = $('.Avatar img').attr('alt') || 'Instagram Creator';
+    const author = $('.Avatar img').attr('alt') || 'Instagram User';
 
     const videoMatch = html.match(/"video_url":"([^"]+)"/) || html.match(/video_url\s*:\s*"([^"]+)"/);
     const displayMatch = html.match(/"display_url":"([^"]+)"/) || html.match(/display_url\s*:\s*"([^"]+)"/);
@@ -279,8 +234,17 @@ async function downloadInstagram(rawUrl) {
             type: 'video',
             extension: 'mp4',
             filename: `instagram_${shortcode}_720p.mp4`
+          },
+          {
+            label: 'Audio MP3',
+            quality: '128kbps',
+            url: videoUrl,
+            type: 'audio',
+            extension: 'mp3',
+            filename: `instagram_audio_${shortcode}.mp3`
           }
-        ]
+        ],
+        musicInfo: { title: 'Instagram Audio Track', author }
       };
     }
 
@@ -308,7 +272,64 @@ async function downloadInstagram(rawUrl) {
     lastError = e;
   }
 
-  // STRATEGI 3: FastDL Fallback
+  // STRATEGI 2: SnapSave Media Service
+  try {
+    const snapRes = await axios.post('https://snapinsta.app/action.php', new URLSearchParams({
+      url: `https://www.instagram.com/reel/${shortcode}/`,
+      action: 'post'
+    }), {
+      headers: {
+        'User-Agent': UA_DESKTOP,
+        'Content-Type': 'application/x-www-form-urlencoded'
+      },
+      timeout: 10000
+    });
+
+    const snapHtml = typeof snapRes.data === 'string' ? snapRes.data : snapRes.data?.data || '';
+    if (snapHtml && snapHtml.includes('http')) {
+      const $ = cheerio.load(snapHtml);
+      const downloadLinks = [];
+      $('a[href^="http"]').each((i, el) => {
+        const href = $(el).attr('href');
+        if (href && (href.includes('cdninstagram') || href.includes('fbcdn') || href.includes('snapinsta') || href.includes('download'))) {
+          downloadLinks.push({
+            label: i === 0 ? 'Resolusi HD 1080p' : 'Resolusi HD 720p',
+            quality: i === 0 ? '1080p (Full HD)' : '720p (Standard HD)',
+            url: href,
+            type: 'video',
+            extension: 'mp4',
+            filename: `instagram_${shortcode}_${i === 0 ? '1080p' : '720p'}.mp4`
+          });
+        }
+      });
+
+      if (downloadLinks.length > 0) {
+        // Tambahkan opsi MP3 audio
+        downloadLinks.push({
+          label: 'Audio MP3',
+          quality: '128kbps',
+          url: downloadLinks[0].url,
+          type: 'audio',
+          extension: 'mp3',
+          filename: `instagram_audio_${shortcode}.mp3`
+        });
+
+        return {
+          success: true,
+          platform: 'Instagram',
+          title: `Instagram Video (${shortcode})`,
+          author: 'Instagram Creator',
+          thumbnail: $('img').first().attr('src') || null,
+          downloadLinks,
+          musicInfo: { title: 'Instagram Audio Track', author: 'Instagram Creator' }
+        };
+      }
+    }
+  } catch (e) {
+    lastError = e;
+  }
+
+  // STRATEGI 3: FastDL Scraper
   try {
     const fastRes = await axios.post('https://fastdl.app/c/', new URLSearchParams({
       url: `https://www.instagram.com/reel/${shortcode}/`,
@@ -340,28 +361,40 @@ async function downloadInstagram(rawUrl) {
     });
 
     if (downloadLinks.length > 0) {
+      if (downloadLinks[0].type === 'video') {
+        downloadLinks.push({
+          label: 'Audio MP3',
+          quality: '128kbps',
+          url: downloadLinks[0].url,
+          type: 'audio',
+          extension: 'mp3',
+          filename: `instagram_audio_${shortcode}.mp3`
+        });
+      }
+
       return {
         success: true,
         platform: 'Instagram',
         title: `Instagram Media (${shortcode})`,
         author: 'Instagram User',
         thumbnail: $('img').first().attr('src') || null,
-        downloadLinks
+        downloadLinks,
+        musicInfo: { title: 'Instagram Audio Track', author: 'Instagram User' }
       };
     }
   } catch (e) {
     lastError = e;
   }
 
-  throw new Error(`Tidak dapat menemukan media dari Instagram. Pastikan akun tidak diprivat dan link video Reels/Postingan bersifat publik.`);
+  throw new Error(`Tidak dapat menemukan media dari Instagram. Pastikan akun tidak diprivat dan link Reels/Postingan bersifat publik.`);
 }
 
 // ===== X / TWITTER SCRAPER =====
 async function downloadTwitter(rawUrl) {
   let lastError = null;
 
-  // Bersihkan URL dan dapatkan Tweet ID
-  const cleanUrl = rawUrl.split('?')[0];
+  // Ekstrak Tweet ID & bersihkan query string mobile
+  const cleanUrl = rawUrl.trim().split('?')[0];
   const tweetIdMatch = cleanUrl.match(/status\/(\d+)/i);
   const tweetId = tweetIdMatch ? tweetIdMatch[1] : null;
 
@@ -401,13 +434,24 @@ async function downloadTwitter(rawUrl) {
     });
 
     if (downloadLinks.length > 0) {
+      // Tambahkan opsi audio MP3
+      downloadLinks.push({
+        label: 'Audio MP3',
+        quality: '128kbps',
+        url: downloadLinks[0].url,
+        type: 'audio',
+        extension: 'mp3',
+        filename: `twitter_audio_${tweetId}.mp3`
+      });
+
       return {
         success: true,
         platform: 'X (Twitter)',
         title,
         author: 'X User',
         thumbnail,
-        downloadLinks
+        downloadLinks,
+        musicInfo: { title: 'X Sound Track', author: 'X User' }
       };
     }
   } catch (e) {
@@ -423,11 +467,13 @@ async function downloadTwitter(rawUrl) {
     if (vxRes.data && (vxRes.data.mediaURLs?.length > 0 || vxRes.data.video_url)) {
       const videoUrl = vxRes.data.video_url || vxRes.data.mediaURLs?.find(u => u.includes('.mp4'));
       if (videoUrl) {
+        const author = vxRes.data.user_name || vxRes.data.user_screen_name || 'X User';
+        const title = vxRes.data.text || 'X Video';
         return {
           success: true,
           platform: 'X (Twitter)',
-          title: vxRes.data.text || 'X Video',
-          author: vxRes.data.user_name || vxRes.data.user_screen_name || 'X User',
+          title,
+          author,
           thumbnail: vxRes.data.mediaURLs?.[0] || null,
           downloadLinks: [
             {
@@ -445,8 +491,17 @@ async function downloadTwitter(rawUrl) {
               type: 'video',
               extension: 'mp4',
               filename: `twitter_${tweetId}_720p.mp4`
+            },
+            {
+              label: 'Audio MP3',
+              quality: '128kbps',
+              url: videoUrl,
+              type: 'audio',
+              extension: 'mp3',
+              filename: `twitter_audio_${tweetId}.mp3`
             }
-          ]
+          ],
+          musicInfo: { title: 'X Sound Track', author }
         };
       }
     }
@@ -454,7 +509,7 @@ async function downloadTwitter(rawUrl) {
     lastError = e;
   }
 
-  throw new Error(`Gagal mengambil video dari X (Twitter). Pastikan tweet bersifat publik dan berisi media video.`);
+  throw new Error(`Gagal mengambil video dari X (Twitter). Pastikan tweet bersifat publik dan mengandung video.`);
 }
 
 // ===== YOUTUBE SCRAPER =====
@@ -499,37 +554,38 @@ async function downloadYouTube(rawUrl) {
       const adaptive = sData.adaptiveFormats || [];
       const downloadLinks = [];
 
-      // Cari format video direct playable (progressive mp4)
-      const directVideos = formats.filter(f => f.url && f.mimeType?.includes('video'));
+      // Ambil stream video dan stream audio
+      const progressiveVideos = formats.filter(f => f.url && f.mimeType?.includes('video'));
+      const adaptiveVideos = adaptive.filter(f => f.url && f.mimeType?.includes('video'));
       const directAudios = adaptive.filter(f => f.url && f.mimeType?.includes('audio'));
 
-      // 1080p / 720p formats
-      const bestVideo = directVideos.find(f => f.qualityLabel?.includes('720') || f.qualityLabel?.includes('1080')) || directVideos[0];
-      const secondVideo = directVideos[1] || bestVideo;
-
-      if (bestVideo && bestVideo.url) {
+      // Format 1080p
+      const hd1080 = adaptiveVideos.find(f => f.qualityLabel?.includes('1080')) || progressiveVideos[0] || adaptiveVideos[0];
+      if (hd1080 && hd1080.url) {
         downloadLinks.push({
           label: 'Resolusi HD 1080p',
-          quality: bestVideo.qualityLabel || '1080p (Full HD)',
-          url: bestVideo.url,
+          quality: hd1080.qualityLabel || '1080p (Full HD)',
+          url: hd1080.url,
           type: 'video',
           extension: 'mp4',
-          filename: `youtube_${videoId}_hd.mp4`
+          filename: `youtube_${videoId}_1080p.mp4`
         });
       }
 
-      if (secondVideo && secondVideo.url) {
+      // Format 720p / standard
+      const hd720 = progressiveVideos.find(f => f.qualityLabel?.includes('720')) || progressiveVideos[0] || adaptiveVideos.find(f => f.qualityLabel?.includes('720'));
+      if (hd720 && hd720.url) {
         downloadLinks.push({
           label: 'Resolusi HD 720p',
-          quality: secondVideo.qualityLabel || '720p (Standard HD)',
-          url: secondVideo.url,
+          quality: hd720.qualityLabel || '720p (Standard HD)',
+          url: hd720.url,
           type: 'video',
           extension: 'mp4',
           filename: `youtube_${videoId}_720p.mp4`
         });
       }
 
-      // MP3 Audio stream
+      // Format Audio MP3
       const bestAudio = directAudios.find(a => a.mimeType?.includes('mp4a')) || directAudios[0];
       if (bestAudio && bestAudio.url) {
         downloadLinks.push({
@@ -553,6 +609,7 @@ async function downloadYouTube(rawUrl) {
           title,
           author,
           thumbnail,
+          duration: vDetails?.lengthSeconds ? `${Math.floor(vDetails.lengthSeconds / 60)}:${('0' + (vDetails.lengthSeconds % 60)).slice(-2)}` : null,
           downloadLinks,
           musicInfo: {
             title: title,
@@ -616,6 +673,14 @@ async function downloadYouTube(rawUrl) {
             extension: 'mp4',
             filename: `youtube_${videoId}_720p.mp4`
           });
+          downloadLinks.push({
+            label: 'Audio MP3',
+            quality: '128kbps',
+            url: convertRes.data.dlink,
+            type: 'audio',
+            extension: 'mp3',
+            filename: `youtube_audio_${videoId}.mp3`
+          });
 
           return {
             success: true,
@@ -623,7 +688,8 @@ async function downloadYouTube(rawUrl) {
             title,
             author: data.a || 'YouTube Creator',
             thumbnail,
-            downloadLinks
+            downloadLinks,
+            musicInfo: { title, author: data.a || 'YouTube Creator' }
           };
         }
       }
@@ -632,7 +698,7 @@ async function downloadYouTube(rawUrl) {
     lastError = e;
   }
 
-  throw new Error(`Gagal mengambil media YouTube. Pastikan link video atau shorts publik dan tidak dibatasi usia.`);
+  throw new Error(`Gagal mengambil media YouTube. Pastikan video bersifat publik dan tidak dibatasi usia.`);
 }
 
 // ===== MAIN SERVERLESS ROUTE HANDLER =====
@@ -694,7 +760,7 @@ export default async function handler(req, res) {
     console.error(`[Scraper Error] Platform: ${platform}, URL: ${trimmedUrl}, Error:`, error.message);
     return res.status(500).json({
       success: false,
-      message: error.message || 'Terjadi kendala saat mengekstrak video. Pastikan link publik dan dapat diakses.'
+      message: error.message || 'Terjadi kendala saat mengekstrak media. Pastikan link bersifat publik dan dapat diakses.'
     });
   }
 }
