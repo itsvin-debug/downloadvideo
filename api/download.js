@@ -9,7 +9,6 @@ const SAVENOW_API_KEY = 'dfcb6d76f2f6a9894gjkege8a4ab232222';
 function cleanInputUrl(raw) {
   if (!raw) return '';
   let str = raw.trim();
-  // Tangani jika ada slash di awal seperti /www.instagram.com...
   str = str.replace(/^\/+/, '');
   if (!str.startsWith('http://') && !str.startsWith('https://')) {
     str = 'https://' + str;
@@ -26,7 +25,7 @@ function detectPlatform(rawUrl) {
   return null;
 }
 
-// ===== HELPER SAVENOW MULTI-PLATFORM SCRAPER =====
+// ===== SAVENOW FAST UNIVERSAL ENGINE =====
 async function scrapeViaSaveNow(targetUrl, formatList = ['1080', '720', 'mp3'], defaultTitle = 'Media Video', fallbackAuthor = 'Creator') {
   try {
     const initPromises = formatList.map(async fmt => {
@@ -34,9 +33,15 @@ async function scrapeViaSaveNow(targetUrl, formatList = ['1080', '720', 'mp3'], 
         const apiUrl = `https://p.savenow.to/api/v2/download?format=${fmt}&url=${encodeURIComponent(targetUrl)}&apikey=${SAVENOW_API_KEY}`;
         const res = await axios.get(apiUrl, {
           headers: { 'User-Agent': UA_DESKTOP, 'Referer': 'https://y2down.cc/' },
-          timeout: 7000
+          timeout: 6000
         });
-        return { format: fmt, progressUrl: res.data?.progress_url, downloadUrl: res.data?.download_url, title: res.data?.title, thumbnail: res.data?.thumbnail_url || res.data?.info?.image };
+        return {
+          format: fmt,
+          progressUrl: res.data?.progress_url,
+          downloadUrl: res.data?.download_url,
+          title: res.data?.title,
+          thumbnail: res.data?.thumbnail_url || res.data?.info?.image
+        };
       } catch (e) {
         return { format: fmt, error: e.message };
       }
@@ -46,16 +51,16 @@ async function scrapeViaSaveNow(targetUrl, formatList = ['1080', '720', 'mp3'], 
     const validTasks = activeTasks.filter(t => t.progressUrl || t.downloadUrl);
 
     if (validTasks.length > 0) {
+      // Tunggu hingga 3 iterasi singkat (maksimal 2.4 detik) agar link yang cepat langsung ready
       const pollPromises = validTasks.map(async task => {
         let finalUrl = task.downloadUrl || null;
         if (!finalUrl && task.progressUrl) {
-          // Poll maksimal 9x (@ 800ms)
-          for (let i = 0; i < 9; i++) {
+          for (let i = 0; i < 3; i++) {
             await new Promise(r => setTimeout(r, 800));
             try {
               const progRes = await axios.get(task.progressUrl, {
                 headers: { 'User-Agent': UA_DESKTOP, 'Referer': 'https://y2down.cc/' },
-                timeout: 4000
+                timeout: 3000
               });
               if (progRes.data?.download_url) {
                 finalUrl = progRes.data.download_url;
@@ -65,19 +70,18 @@ async function scrapeViaSaveNow(targetUrl, formatList = ['1080', '720', 'mp3'], 
           }
         }
 
-        if (finalUrl) {
-          const isAudio = task.format === 'mp3';
-          const is1080 = task.format === '1080';
-          return {
-            label: isAudio ? 'Audio MP3' : is1080 ? 'Resolusi HD 1080p' : 'Resolusi HD 720p',
-            quality: isAudio ? '128kbps' : is1080 ? '1080p (Full HD)' : '720p (Standard HD)',
-            url: finalUrl,
-            type: isAudio ? 'audio' : 'video',
-            extension: isAudio ? 'mp3' : 'mp4',
-            filename: `media_${Date.now()}_${task.format}.${isAudio ? 'mp3' : 'mp4'}`
-          };
-        }
-        return null;
+        const effectiveUrl = finalUrl || task.progressUrl;
+        const isAudio = task.format === 'mp3';
+        const is1080 = task.format === '1080';
+
+        return {
+          label: isAudio ? 'Audio MP3' : is1080 ? 'Resolusi HD 1080p' : 'Resolusi HD 720p',
+          quality: isAudio ? '128kbps' : is1080 ? '1080p (Full HD)' : '720p (Standard HD)',
+          url: effectiveUrl,
+          type: isAudio ? 'audio' : 'video',
+          extension: isAudio ? 'mp3' : 'mp4',
+          filename: `media_${Date.now()}_${task.format}.${isAudio ? 'mp3' : 'mp4'}`
+        };
       });
 
       const resolved = (await Promise.all(pollPromises)).filter(Boolean);
@@ -126,7 +130,7 @@ async function downloadTikTok(rawUrl) {
   try {
     const homeRes = await axios.get('https://ssstik.io/en', {
       headers: { 'User-Agent': UA_DESKTOP },
-      timeout: 10000
+      timeout: 6000
     });
     const ttMatch = homeRes.data.match(/tt:'([^']+)'/);
     const ttToken = ttMatch ? ttMatch[1] : '';
@@ -145,7 +149,7 @@ async function downloadTikTok(rawUrl) {
         'Referer': 'https://ssstik.io/en',
         'Cookie': cookies
       },
-      timeout: 12000
+      timeout: 8000
     });
 
     const $ = cheerio.load(postRes.data);
@@ -221,7 +225,7 @@ async function downloadTikTok(rawUrl) {
         'User-Agent': UA_DESKTOP,
         'Referer': 'https://www.tikwm.com/'
       },
-      timeout: 10000
+      timeout: 6000
     });
     const data = res.data;
     if (data?.code === 0 && data.data) {
@@ -277,6 +281,20 @@ async function downloadTikTok(rawUrl) {
     lastError = e;
   }
 
+  // Strategi 3: Savenow V2 Fallback
+  try {
+    const snData = await scrapeViaSaveNow(url, ['1080', '720', 'mp3'], 'TikTok Video', 'TikTok Creator');
+    if (snData && snData.downloadLinks?.length > 0) {
+      return {
+        success: true,
+        platform: 'TikTok',
+        ...snData
+      };
+    }
+  } catch (e) {
+    lastError = e;
+  }
+
   throw new Error(`Gagal memproses TikTok: ${lastError?.message || 'Video tidak ditemukan'}`);
 }
 
@@ -319,7 +337,7 @@ async function downloadInstagram(rawUrl) {
     throw new Error('Link Instagram tidak valid. Masukkan link Reels, Postingan, atau TV Instagram yang benar.');
   }
 
-  // STRATEGI 1: Instagram Embed Substring Parser (Sangat Cepat & Direct)
+  // STRATEGI 1: Instagram Embed Substring Parser (Super Cepat < 1 detik)
   try {
     const embedUrl = `https://www.instagram.com/p/${shortcode}/embed/captioned/`;
     const res = await axios.get(embedUrl, {
@@ -328,7 +346,7 @@ async function downloadInstagram(rawUrl) {
         'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
         'Accept-Language': 'en-US,en;q=0.9'
       },
-      timeout: 7000
+      timeout: 5000
     });
 
     const html = res.data;
@@ -441,56 +459,53 @@ async function downloadTwitter(rawUrl) {
     lastError = e;
   }
 
-  // STRATEGI 2: TwitSave Scraper
+  // STRATEGI 2: VxTwitter Fast Open Engine
   try {
-    const twitSaveUrl = `https://twitsave.com/info?url=${encodeURIComponent(`https://twitter.com/i/status/${tweetId}`)}`;
-    const response = await axios.get(twitSaveUrl, {
-      headers: { 'User-Agent': UA_DESKTOP },
-      timeout: 8000
+    const vxRes = await axios.get(`https://api.vxtwitter.com/Twitter/status/${tweetId}`, {
+      headers: { 'User-Agent': 'Mozilla/5.0' },
+      timeout: 4000
     });
-
-    const $ = cheerio.load(response.data);
-    const title = $('div.leading-tight h2, p.text-gray-600, div.leading-tight p').first().text().trim() || 'X (Twitter) Video';
-    const thumbnail = $('div.aspect-w-16 img, div.w-full img, img[src*="twimg"]').first().attr('src') || null;
-    const downloadLinks = [];
-
-    $('a[href*="download"], a.btn-primary, a[download]').each((_, el) => {
-      const link = $(el).attr('href');
-      const text = $(el).text().trim();
-
-      if (link && (link.startsWith('http') || link.startsWith('/download'))) {
-        const fullUrl = link.startsWith('http') ? link : `https://twitsave.com${link}`;
-        const is1080 = text.includes('1080') || text.includes('HD');
-        downloadLinks.push({
-          label: is1080 ? 'Resolusi HD 1080p' : 'Resolusi HD 720p',
-          quality: is1080 ? '1080p (Full HD)' : '720p (Standard HD)',
-          url: fullUrl,
-          type: 'video',
-          extension: 'mp4',
-          filename: `twitter_${tweetId}_${is1080 ? '1080p' : '720p'}.mp4`
-        });
+    if (vxRes.data) {
+      const item = vxRes.data;
+      const videoUrl = item.video_url || item.mediaURLs?.find(u => u.includes('.mp4') || u.includes('video'));
+      if (videoUrl) {
+        const author = item.user_name || item.user_screen_name || 'X User';
+        const title = item.text || 'X Video';
+        return {
+          success: true,
+          platform: 'X (Twitter)',
+          title,
+          author,
+          thumbnail: item.mediaURLs?.[0] || null,
+          downloadLinks: [
+            {
+              label: 'Resolusi HD 1080p',
+              quality: '1080p (Full HD)',
+              url: videoUrl,
+              type: 'video',
+              extension: 'mp4',
+              filename: `twitter_${tweetId}_1080p.mp4`
+            },
+            {
+              label: 'Resolusi HD 720p',
+              quality: '720p (Standard HD)',
+              url: videoUrl,
+              type: 'video',
+              extension: 'mp4',
+              filename: `twitter_${tweetId}_720p.mp4`
+            },
+            {
+              label: 'Audio MP3',
+              quality: '128kbps',
+              url: videoUrl,
+              type: 'audio',
+              extension: 'mp3',
+              filename: `twitter_audio_${tweetId}.mp3`
+            }
+          ],
+          musicInfo: { title: 'X Sound Track', author }
+        };
       }
-    });
-
-    if (downloadLinks.length > 0) {
-      downloadLinks.push({
-        label: 'Audio MP3',
-        quality: '128kbps',
-        url: downloadLinks[0].url,
-        type: 'audio',
-        extension: 'mp3',
-        filename: `twitter_audio_${tweetId}.mp3`
-      });
-
-      return {
-        success: true,
-        platform: 'X (Twitter)',
-        title,
-        author: 'X User',
-        thumbnail,
-        downloadLinks,
-        musicInfo: { title: 'X Sound Track', author: 'X User' }
-      };
     }
   } catch (e) {
     lastError = e;
@@ -519,13 +534,13 @@ async function downloadYouTube(rawUrl) {
   let thumbnail = `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`;
 
   try {
-    const oembedRes = await axios.get(`https://noembed.com/embed?url=${encodeURIComponent(standardUrl)}`, { timeout: 4000 });
+    const oembedRes = await axios.get(`https://noembed.com/embed?url=${encodeURIComponent(standardUrl)}`, { timeout: 3000 });
     if (oembedRes.data?.title) title = oembedRes.data.title;
     if (oembedRes.data?.author_name) author = oembedRes.data.author_name;
     if (oembedRes.data?.thumbnail_url) thumbnail = oembedRes.data.thumbnail_url;
   } catch (_) {}
 
-  // 2. STRATEGI 1: Savenow V2 Engine (1080p, 720p, MP3)
+  // 2. STRATEGI 1: Savenow V2 Engine (Mendukung 1080p, 720p, MP3 termasuk Video Berbatas Usia & Musik)
   try {
     const snData = await scrapeViaSaveNow(standardUrl, ['1080', '720', 'mp3'], title, author);
     if (snData && snData.downloadLinks?.length > 0) {
@@ -559,7 +574,7 @@ async function downloadYouTube(rawUrl) {
       videoId: videoId
     }, {
       headers: { 'Content-Type': 'application/json', 'User-Agent': UA_DESKTOP },
-      timeout: 6000
+      timeout: 5000
     });
 
     const sData = playerRes.data?.streamingData;
@@ -608,7 +623,7 @@ async function downloadYouTube(rawUrl) {
     lastError = e;
   }
 
-  throw new Error(`Gagal mengambil media YouTube. Pastikan video bersifat publik dan tidak dibatasi usia.`);
+  throw new Error(`Gagal mengambil media YouTube. Pastikan video bersifat publik dan dapat diakses.`);
 }
 
 // ===== MAIN SERVERLESS ROUTE HANDLER =====

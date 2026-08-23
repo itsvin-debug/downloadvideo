@@ -15,18 +15,39 @@ export default async function handler(req, res) {
   const safeFilename = (filename || 'kaze_download.mp4').replace(/[^a-zA-Z0-9_.\-]/g, '_');
 
   try {
-    const decodedUrl = decodeURIComponent(url);
+    let targetUrl = decodeURIComponent(url);
+
+    // Jika targetUrl adalah progress_url (masih diproses di server encoder), poll hingga selesai
+    if (targetUrl.includes('savenow.to/api/progress') || targetUrl.includes('/api/progress?id=')) {
+      let resolved = false;
+      for (let i = 0; i < 20; i++) {
+        try {
+          const progRes = await axios.get(targetUrl, {
+            headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)', 'Referer': 'https://y2down.cc/' },
+            timeout: 5000
+          });
+          if (progRes.data?.download_url) {
+            targetUrl = progRes.data.download_url;
+            resolved = true;
+            break;
+          }
+        } catch (_) {}
+        await new Promise(r => setTimeout(r, 1000));
+      }
+    }
 
     // Tentukan referer yang cocok sesuai domain target
     let referer = undefined;
-    if (decodedUrl.includes('tiktok') || decodedUrl.includes('tikcdn')) {
+    if (targetUrl.includes('tiktok') || targetUrl.includes('tikcdn')) {
       referer = 'https://www.tiktok.com/';
-    } else if (decodedUrl.includes('instagram') || decodedUrl.includes('cdninstagram') || decodedUrl.includes('fbcdn')) {
+    } else if (targetUrl.includes('instagram') || targetUrl.includes('cdninstagram') || targetUrl.includes('fbcdn')) {
       referer = 'https://www.instagram.com/';
-    } else if (decodedUrl.includes('twimg') || decodedUrl.includes('twitter') || decodedUrl.includes('x.com')) {
+    } else if (targetUrl.includes('twimg') || targetUrl.includes('twitter') || targetUrl.includes('x.com')) {
       referer = 'https://twitter.com/';
-    } else if (decodedUrl.includes('googlevideo') || decodedUrl.includes('youtube') || decodedUrl.includes('ytimg')) {
+    } else if (targetUrl.includes('googlevideo') || targetUrl.includes('youtube') || targetUrl.includes('ytimg')) {
       referer = 'https://www.youtube.com/';
+    } else if (targetUrl.includes('savenow.to')) {
+      referer = 'https://y2down.cc/';
     }
 
     const headers = {
@@ -36,7 +57,7 @@ export default async function handler(req, res) {
 
     const response = await axios({
       method: 'GET',
-      url: decodedUrl,
+      url: targetUrl,
       responseType: 'stream',
       headers,
       timeout: 30000
