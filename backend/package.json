@@ -1,0 +1,30 @@
+{
+  "name": "kaze-downloader-backend",
+  "version": "1.0.0",
+  "description": "Backend API Downloader Video TikTok, Instagram, dan X tanpa watermark",
+  "main": "src/server.js",
+  "type": "module",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js"
+  },
+  "keywords": [
+    "downloader",
+    "tiktok",
+    "instagram",
+    "twitter",
+    "x"
+  ],
+  "author": "Kaze",
+  "license": "MIT",
+  "dependencies": {
+    "@distube/ytdl-core": "^4.16.12",
+    "axios": "^1.7.9",
+    "cheerio": "^1.0.0",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "primesave-dl": "^1.0.2",
+    "snapsave-media-downloader": "^2.4.1"
+  }
+}

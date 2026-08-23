@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html class="dark" lang="id">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%23c0c1ff'><path d='M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 14.5v-9l6 4.5-6 4.5z'/></svg>" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>website download by kaze - Fast & No Watermark Downloader</title>
+    
+    <!-- Google Fonts Inter & Material Symbols Outlined -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet" />
+    
+    <!-- Tailwind CSS with custom Stitch theme -->
+    <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+    <script id="tailwind-config">
+      tailwind.config = {
+        darkMode: "class",
+        theme: {
+          extend: {
+            colors: {
+              "on-primary-fixed-variant": "#2f2ebe",
+              "surface-container-lowest": "#060e20",
+              "surface-tint": "#c0c1ff",
+              "secondary-fixed-dim": "#ddb7ff",
+              "on-tertiary": "#00344d",
+              "background": "#0b1326",
+              "surface-container": "#171f33",
+              "error": "#ffb4ab",
+              "secondary-fixed": "#f0dbff",
+              "on-error": "#690005",
+              "tertiary-fixed-dim": "#89ceff",
+              "surface": "#0b1326",
+              "on-surface-variant": "#c7c4d7",
+              "on-tertiary-fixed": "#001e2f",
+              "on-secondary-fixed": "#2c0051",
+              "tertiary-fixed": "#c9e6ff",
+              "inverse-surface": "#dae2fd",
+              "primary-fixed-dim": "#c0c1ff",
+              "on-background": "#dae2fd",
+              "on-tertiary-container": "#002d43",
+              "secondary": "#ddb7ff",
+              "primary-container": "#8083ff",
+              "on-primary-container": "#0d0096",
+              "outline-variant": "#464554",
+              "on-tertiary-fixed-variant": "#004c6e",
+              "outline": "#908fa0",
+              "tertiary-container": "#009ada",
+              "secondary-container": "#6f00be",
+              "on-primary": "#1000a9",
+              "primary-fixed": "#e1e0ff",
+              "surface-bright": "#31394d",
+              "on-primary-fixed": "#07006c",
+              "on-secondary": "#490080",
+              "surface-dim": "#0b1326",
+              "surface-container-low": "#131b2e",
+              "on-secondary-fixed-variant": "#6900b3",
+              "error-container": "#93000a",
+              "on-error-container": "#ffdad6",
+              "on-surface": "#dae2fd",
+              "surface-container-highest": "#2d3449",
+              "inverse-on-surface": "#283044",
+              "inverse-primary": "#494bd6",
+              "surface-variant": "#2d3449",
+              "surface-container-high": "#222a3d",
+              "tertiary": "#89ceff",
+              "on-secondary-container": "#d6a9ff",
+              "primary": "#c0c1ff"
+            },
+            borderRadius: {
+              "DEFAULT": "0.25rem",
+              "lg": "0.5rem",
+              "xl": "0.75rem",
+              "2xl": "1rem",
+              "3xl": "1.5rem",
+              "full": "9999px"
+            },
+            spacing: {
+              "gutter": "24px",
+              "margin-desktop": "48px",
+              "container-max": "1200px",
+              "margin-mobile": "16px",
+              "unit": "4px"
+            },
+            fontFamily: {
+              sans: ["Inter", "sans-serif"]
+            }
+          }
+        }
+      }
+    </script>
+  </head>
+  <body class="bg-background text-on-surface font-sans min-h-screen antialiased selection:bg-primary-container selection:text-on-primary-container overflow-x-hidden">
+    <div id="root"></div>
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
+</html>

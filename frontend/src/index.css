@@ -1,0 +1,118 @@
+/* styling custom buat website downloader kaze */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap');
+
+:root {
+  color-scheme: dark;
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  background-color: #0b1326;
+  color: #dae2fd;
+  font-family: 'Inter', sans-serif;
+  overflow-x: hidden;
+}
+
+/* efek glassmorphism kece */
+.glass-panel {
+  background-color: rgba(23, 31, 51, 0.45);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.glass-panel-hover {
+  transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.glass-panel-hover:hover {
+  background-color: rgba(34, 42, 61, 0.6);
+  backdrop-filter: blur(32px);
+  transform: translateY(-4px) scale(1.015);
+  box-shadow: 0 16px 36px -10px rgba(128, 131, 255, 0.2), 0 0 20px rgba(192, 193, 255, 0.1);
+  border-color: rgba(192, 193, 255, 0.3);
+}
+
+/* animasi glow teks splash */
+.fade-in-glow {
+  opacity: 0;
+  animation: fadeInGlow 2.2s ease-in-out forwards;
+}
+
+.delayed-fade-in {
+  opacity: 0;
+  animation: fadeIn 1s ease-in-out forwards;
+}
+
+/* garis loader berdenyut */
+.pulse-loader {
+  width: 140px;
+  height: 3px;
+  background: rgba(192, 193, 255, 0.15);
+  position: relative;
+  overflow: hidden;
+  border-radius: 9999px;
+  box-shadow: 0 0 12px rgba(99, 102, 241, 0.2);
+}
+
+.pulse-loader::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 100%;
+  width: 35%;
+  background: #c0c1ff;
+  box-shadow: 0 0 16px rgba(192, 193, 255, 0.9);
+  animation: loadingProgress 1.8s infinite ease-in-out;
+}
+
+@keyframes fadeInGlow {
+  0% {
+    opacity: 0;
+    text-shadow: 0 0 0px rgba(192, 193, 255, 0);
+    transform: translateY(12px);
+  }
+  100% {
+    opacity: 1;
+    text-shadow: 0 0 24px rgba(192, 193, 255, 0.45);
+    transform: translateY(0);
+  }
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes loadingProgress {
+  0% {
+    left: -35%;
+  }
+  100% {
+    left: 100%;
+  }
+}
+
+/* scrollbar custom biar makin estetik */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: #0b1326;
+}
+::-webkit-scrollbar-thumb {
+  background: #222a3d;
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #31394d;
+}

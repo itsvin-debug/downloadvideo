@@ -1,0 +1,30 @@
+# Node modules & dependencies
+node_modules/
+*/node_modules/
+
+# Production build outputs
+dist/
+build/
+*/dist/
+
+# Environment files
+.env
+.env.local
+.env.*.local
+*.env
+
+# Logs & Temporary files
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+*.log
+
+# Editor & OS files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Backend binary executables (yt-dlp auto-downloaded on server or cloud)
+backend/bin/
